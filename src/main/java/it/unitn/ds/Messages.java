@@ -51,8 +51,7 @@ public class Messages {
         }
     }
 
-    // Replica (non-coordinator) -> Replica (coordinator)
-
+    // Replica (non-coordinator) -> Replica (coordinator): 1st phase of Write committing
     public static class ForwardWrite implements Serializable {
         public final ActorRef client;
         public final int index;
@@ -74,4 +73,39 @@ public class Messages {
             this.client = client; this.index = index; this.value = value;
         }
     }
+
+    // Coordinator -> Replicas (all of them, including itself)
+    public static class UpdateWrite implements Serializable{
+        public final UpdateId id;
+        public final int index;
+        public final int value;
+        public final ActorRef origin;
+        public final ActorRef client;
+        public UpdateWrite(UpdateId id, int index, int value, ActorRef origin, ActorRef client) {
+            this.id = id;
+            this.index = index;
+            this.value = value;
+            this.origin = origin;
+            this.client = client;
+        }
+    }
+
+    // Replica -> Coordinator : acknowledgment of a proposed Update
+    public static class Ack implements Serializable {
+        public final UpdateId id;
+        public final int fromReplica;
+        public Ack(UpdateId id, int fromReplica) {
+            this.id = id;
+            this.fromReplica = fromReplica;
+        }
+    }
+
+    // Replica (non-coordinator) -> Replica (coordinator): 2st phase of Write committing
+    public static class WriteOK implements Serializable {
+        public final UpdateId id;
+        public WriteOK(UpdateId id) {
+            this.id = id;
+        }
+    }
+
 }

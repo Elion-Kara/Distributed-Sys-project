@@ -37,8 +37,8 @@ public abstract class AbstractClient extends AbstractActor {
     // =================================================================================
 
     public static class ReadRequest {
-        ActorRef replica;
-        int index;
+        public final ActorRef replica;
+        public final int index;
 
         public ReadRequest(int index) {
             this(index, null);
@@ -51,9 +51,9 @@ public abstract class AbstractClient extends AbstractActor {
     }
 
     public static class WriteRequest {
-        ActorRef replica;
-        int index;
-        int value;
+        public final ActorRef replica;
+        public final int index;
+        public final int value;
 
         public WriteRequest(int index, int value) {
             this(index, value, null);
