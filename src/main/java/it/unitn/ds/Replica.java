@@ -5,9 +5,16 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
+import scala.concurrent.duration.Duration;
+
 
 import akka.actor.ActorRef;
+import akka.actor.Cancellable;
 import akka.actor.Props;
+import akka.io.dns.internal.Message;
+import akka.util.Timeout;
+import it.unitn.ds.Messages.UpdateWrite;
 
 public class Replica extends AbstractReplica {
 
@@ -22,6 +29,12 @@ public class Replica extends AbstractReplica {
 
     // Crash state
     private boolean crashed = false;
+
+    // Election state 
+    private boolean electionInProgress = false;
+    private int nextForwardReqId = 0; // TODO: clean upon new election
+    private final Map<Integer, Cancellable> pendingForwards = new HashMap<>(); // TODO: clean upon new election
+    private Cancellable heartbeatTimeoutTimer; // TODO: clean upon new election
 
     private final Map<UpdateId, Messages.UpdateWrite> pendingUpdateWrites = new HashMap<>();
     private final Map<UpdateId, Set<Integer>> pendingAck = new HashMap<>(); // Coordinator's only
@@ -56,6 +69,10 @@ public class Replica extends AbstractReplica {
         return coordinatorId == this.id;
     }
 
+    private int getCoordinatorId() {
+        return coordinatorId;
+    }
+
     private void unicast(java.io.Serializable msg, ActorRef dest) {
         if (crashed) return;
         tell(msg, dest); // tell() is a method from AbstractReplica that simulates network latency
@@ -72,6 +89,11 @@ public class Replica extends AbstractReplica {
         this.currentEpoch = 0;
         this.nextSeqNum = 0;
         debug("system initialized, coordinator=" + coordinatorId + ", N=" + group.size());
+        if (isCoordinator()){
+            scheduleNextHeartbeat();
+        } else {
+            resetHeartbeatTimeout();
+        }
     }
 
     //
@@ -100,6 +122,70 @@ public class Replica extends AbstractReplica {
     }
 
     //
+    // –––– Timers –––
+    //
+
+    Cancellable setTimeout(int time, java.io.Serializable msg) {
+        return getContext().system().scheduler().scheduleOnce(
+            Duration.create(time, TimeUnit.MILLISECONDS),  
+            getSelf(),
+            msg, // the message to send
+            getContext().system().dispatcher(), getSelf()
+            );
+
+    }
+
+    public void onTimeoutUpdate(Messages.TimeoutUpdate msg) {
+        // if the Update is still in the replica waiting to be committed,
+        // the WriteOK has never been recieved, therefore the coordinator is crashed
+        if (!pendingUpdateWrites.containsKey(msg.id)) return;
+        if (electionInProgress) return;
+        electionInProgress = true;
+        callbackOnElectionStarted(getCoordinatorId());
+    }
+
+    public void onTimeoutForward(Messages.TimeoutForward msg) {
+        // if the Update is still in the replica waiting to be committed,
+        // the WriteOK has never been recieved, therefore the coordinator is crashed
+        if (!pendingForwards.containsKey(msg.localReqId)) return;
+        if (electionInProgress) return;
+        electionInProgress = true;
+        callbackOnElectionStarted(getCoordinatorId());
+    }
+
+
+    //
+    // –––– Heartbeat –––
+    //
+    private void scheduleNextHeartbeat() {
+        setTimeout(getCoordinatorBeatInterval(), new Messages.SendHeartbeat());
+    }
+
+    private void onSendHeartbeat(Messages.SendHeartbeat msg) {
+        for (ActorRef replica : group.values()) {
+            unicast(new Messages.Heartbeat(), replica);
+        }
+        scheduleNextHeartbeat();
+    }
+
+    private void onHeartbeat(Messages.Heartbeat msg) {
+        if (isCoordinator()) return; // non sospetto me stesso
+        resetHeartbeatTimeout();
+    }
+
+    private void resetHeartbeatTimeout() {
+        if (heartbeatTimeoutTimer != null) heartbeatTimeoutTimer.cancel();
+        int detection = (int)(getCoordinatorBeatInterval() * 3.0) + (getMaxLatency() * getSystemNumberOfActors() * 2);
+        heartbeatTimeoutTimer = setTimeout(detection, new Messages.SuspectCoordinatorCrashed());
+    }
+
+    private void onSuspectCoordinatorCrashed(Messages.SuspectCoordinatorCrashed msg) {
+        if (electionInProgress) return;
+        electionInProgress = true;
+        callbackOnElectionStarted(coordinatorId);
+    }
+
+    //
     // ––– READ –––
     //
 
@@ -115,10 +201,15 @@ public class Replica extends AbstractReplica {
     // On Write Request start the Update protocol
     private void onWriteReq(Messages.WriteReq msg) {
         if (isCoordinator()) {
-            startUpdate(msg.client, msg.index, msg.value, getSelf());
+            nextForwardReqId++;
+            startUpdate(msg.client, msg.index, msg.value, getSelf(), nextForwardReqId);
         } else {
             // Forward the Write request to the coordinator
-            unicast(new Messages.ForwardWrite(msg.client, msg.index, msg.value, getSelf()), group.get(coordinatorId));
+            nextForwardReqId++;
+            unicast(new Messages.ForwardWrite(msg.client, msg.index, msg.value, getSelf(), nextForwardReqId), group.get(coordinatorId));
+            int timeout = 2 * getMaxLatency() * getSystemNumberOfActors(); // margine generoso per 2 hop con più repliche in gioco
+            Cancellable c = setTimeout(timeout, new Messages.TimeoutForward(nextForwardReqId));
+            pendingForwards.put(nextForwardReqId, c);
         }
     }
 
@@ -128,7 +219,8 @@ public class Replica extends AbstractReplica {
             debug("received ForwardWrite but I'm not coordinator, ignoring");
             return;
         }
-        startUpdate(msg.client, msg.index, msg.value, msg.origin);
+        startUpdate(msg.client, msg.index, msg.value, msg.origin, msg.localReqId);
+        //setTimeout(COORDINATOR_BEAT_INTERVAL);
     }
 
     // Notify the Client of the Write response
@@ -141,9 +233,9 @@ public class Replica extends AbstractReplica {
     //
 
     // 1.  Upon receiving the update, the coordinator send it to all replicas (its self included)
-    private void startUpdate(ActorRef client, int index, int value, ActorRef origin) {
+    private void startUpdate(ActorRef client, int index, int value, ActorRef origin, int localReqId) {
         UpdateId id = new UpdateId(currentEpoch, nextSeqNum++);
-        Messages.UpdateWrite update = new Messages.UpdateWrite(id, index, value, origin, client);
+        Messages.UpdateWrite update = new Messages.UpdateWrite(id, index, value, origin, client, localReqId);
 
         pendingAck.put(id, new HashSet<>());
 
@@ -154,8 +246,13 @@ public class Replica extends AbstractReplica {
 
     // 2. Every replica save the update and fires an ACK to coordinator
     private void onUpdateWrite(Messages.UpdateWrite msg) {
+        if (msg.origin.equals(getSelf()) && pendingForwards.containsKey(msg.localReqId)){
+            pendingForwards.get(msg.localReqId).cancel();
+            pendingForwards.remove(msg.localReqId);
+        }
         pendingUpdateWrites.put(msg.id, msg);
         unicast(new Messages.Ack(msg.id, this.id), group.get(coordinatorId));
+        setTimeout(COORDINATOR_BEAT_INTERVAL, new Messages.TimeoutUpdate(msg.id));
     }
 
     // 3. Coordinator gets the ACKs and applies the update if quorum is reached
@@ -198,10 +295,6 @@ public class Replica extends AbstractReplica {
 
     }
 
-    //
-    //
-    //
-
 
     //
     // Receive builder
@@ -214,6 +307,11 @@ public class Replica extends AbstractReplica {
                 .match(Messages.ForwardWrite.class, this::onForwardWrite)
                 .match(Messages.WriteDone.class, this::onWriteDone)
                 .match(Messages.UpdateWrite.class, this::onUpdateWrite)
+                .match(Messages.TimeoutUpdate.class, this::onTimeoutUpdate)
+                .match(Messages.TimeoutForward.class, this::onTimeoutForward)
+                .match(Messages.Heartbeat.class, this::onHeartbeat)
+                .match(Messages.SendHeartbeat.class, this::onSendHeartbeat)
+                .match(Messages.SuspectCoordinatorCrashed.class, this::onSuspectCoordinatorCrashed)
                 .match(Messages.Ack.class, this::onAck)
                 .match(Messages.WriteOK.class, this::onWriteOK)
                 .build();

@@ -2,14 +2,17 @@ package it.unitn.ds;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 
 import akka.actor.ActorRef;
 import akka.actor.ActorSystem;
+import it.unitn.ds.AbstractClient.ReadRequest;
+import it.unitn.ds.AbstractClient.WriteRequest;
 import it.unitn.ds.AbstractReplica.InitSystem;
 
 public class Main {
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Exception {
         System.out.println("========================================");
         System.out.println("START");
         System.out.println("========================================\n");

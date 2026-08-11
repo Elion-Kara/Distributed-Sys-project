@@ -18,8 +18,8 @@ public class TestsCommons {
     public static final int TEST_VALUE = 10;
     public static final int TEST_COORDINATOR_BEAT_INTERVAL = AbstractReplica.COORDINATOR_BEAT_INTERVAL;
 
-    public static final boolean DO_PRINTS = false;
-    public static final boolean DO_DEBUG_PRINTS = false;
+    public static final boolean DO_PRINTS = true;
+    public static final boolean DO_DEBUG_PRINTS = true;
 
     public static class TestsSystemWrapper {
         public final ActorSystem system;
@@ -63,6 +63,7 @@ public class TestsCommons {
         if (DO_PRINTS) {
             Logger.setDestinationStdout();
             Logger.setDebugEnabled(DO_DEBUG_PRINTS);
+            Logger.setDestinationFile("debug.log");
         } else {
             Logger.disable();
         }

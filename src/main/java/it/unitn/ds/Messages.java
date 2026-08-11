@@ -57,11 +57,14 @@ public class Messages {
         public final int index;
         public final int value;
         public final ActorRef origin; // replica that originally received the request from the client
-        public ForwardWrite(ActorRef client, int index, int value, ActorRef origin) {
+        public final int localReqId;
+        public ForwardWrite(ActorRef client, int index, int value, ActorRef origin, int localReqId) {
             this.client = client;
             this.index = index;
             this.value = value;
             this.origin = origin;
+            this.localReqId = localReqId;
+        
         }
     }
 
@@ -81,12 +84,14 @@ public class Messages {
         public final int value;
         public final ActorRef origin;
         public final ActorRef client;
-        public UpdateWrite(UpdateId id, int index, int value, ActorRef origin, ActorRef client) {
+        public final int localReqId;
+        public UpdateWrite(UpdateId id, int index, int value, ActorRef origin, ActorRef client, int localReqId) {
             this.id = id;
             this.index = index;
             this.value = value;
             this.origin = origin;
             this.client = client;
+            this.localReqId = localReqId;
         }
     }
 
@@ -108,4 +113,27 @@ public class Messages {
         }
     }
 
+    public static class Timeout implements Serializable {}
+    
+    public static class TimeoutUpdate implements Serializable {
+        public final UpdateId id;
+        public TimeoutUpdate(UpdateId id){
+            this.id = id;
+        }
+    }
+
+    public static class TimeoutForward implements Serializable {
+        public final int localReqId;
+        public TimeoutForward(int localReqId){
+            this.localReqId = localReqId;
+        }
+    }
+
+    public static class Heartbeat implements Serializable {}
+
+    public static class SendHeartbeat implements Serializable {}
+
+    public static class SuspectCoordinatorCrashed implements Serializable {}
+
+    
 }

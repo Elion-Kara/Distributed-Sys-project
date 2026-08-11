@@ -161,7 +161,7 @@ public abstract class AbstractClient extends AbstractActor {
      * @param readResult The status of system's answer
      */
     final void callbackOnReadResult(AbstractClient.ReadResult readResult) {
-        log("READ complete " + readResult);
+        log("READ complete " + readResult + " from " + readResult.fromReplica);
         listener.ifPresent(l -> l.tell(readResult, getSelf()));
     }
 
@@ -171,7 +171,7 @@ public abstract class AbstractClient extends AbstractActor {
      * @param writeResult The status of system's answer
      */
     final void callbackOnWriteResult(AbstractClient.WriteResult writeResult) {
-        log("WRITE complete " + writeResult);
+        log("WRITE complete " + writeResult + " from " + writeResult.fromReplica);
         listener.ifPresent(l -> l.tell(writeResult, getSelf()));
     }
 
