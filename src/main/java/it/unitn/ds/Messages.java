@@ -2,6 +2,8 @@ package it.unitn.ds;
 
 import java.io.Serializable;
 import akka.actor.ActorRef;
+import java.util.List;
+import java.util.Map;
 
 public class Messages {
 
@@ -68,15 +70,6 @@ public class Messages {
         }
     }
 
-    public static class WriteDone implements Serializable {
-        public final ActorRef client;
-        public final int index;
-        public final int value;
-        public WriteDone(ActorRef client, int index, int value) {
-            this.client = client; this.index = index; this.value = value;
-        }
-    }
-
     // Coordinator -> Replicas (all of them, including itself)
     public static class UpdateWrite implements Serializable{
         public final UpdateId id;
@@ -135,5 +128,35 @@ public class Messages {
 
     public static class SuspectCoordinatorCrashed implements Serializable {}
 
-    
+    public static class Election implements Serializable {
+        public final int senderId; // ID of the replica sending the message
+        public final Map<Integer, UpdateId> candidates; // replicaId -> last known update id of that replica
+        public Election(int senderId, Map<Integer, UpdateId> candidates) {
+            this.senderId = senderId;
+            this.candidates = candidates;
+        }
+    }
+
+    public static class ElectionAck implements Serializable {}
+
+    public static class ElectionAckTimeout implements Serializable {
+        public final int expectedFromId;
+        public ElectionAckTimeout(int expectedFromId) {
+            this.expectedFromId = expectedFromId;
+        }
+    }
+
+    public static class ElectionOverallTimeout implements Serializable {}
+
+    public static class Synchronization implements Serializable {
+        public final int newCoordinatorId;
+        public final int newEpoch;
+        public final List<UpdateWrite> updates; // all the updates known to the new coordinator, ordered by their UpdateId
+        public Synchronization(int newCoordinatorId, int newEpoch, List<UpdateWrite> updates) {
+            this.newCoordinatorId = newCoordinatorId;
+            this.newEpoch = newEpoch;
+            this.updates = updates;
+        }
+    }
+        
 }
