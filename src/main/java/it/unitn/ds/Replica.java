@@ -405,7 +405,7 @@ public class Replica extends AbstractReplica {
         }
 
         if (!electionInProgress) {
-            // Message from the past (controllo extra): se non siamo in election e il coordinatore attuale è già tra i candidati di questo messaggio,
+            // TODO: Message from the past (additional check): se non siamo in election e il coordinatore attuale è già tra i candidati di questo messaggio,
             // significa che è un messaggio duplicato rimasto in rete da un'election appena finita
             if (coordinatorId != -1 && msg.candidates.containsKey(coordinatorId)) {
                 return;
