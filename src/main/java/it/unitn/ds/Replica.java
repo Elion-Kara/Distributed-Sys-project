@@ -318,7 +318,8 @@ public class Replica extends AbstractReplica {
         appliedUpdates.add(id);
         callbackOnUpdateApplied(update.index, update.value);
         log("applied update " + id + " (" + update.index + ", " + update.value + ")");
-
+        
+        // this replica was the one originally contacted by the client, so it replies directly
         if (update.origin.equals(getSelf())) {
             unicast(new Messages.WriteResp(update.index, update.value, this.id), update.client);
         }
@@ -370,14 +371,14 @@ public class Replica extends AbstractReplica {
     // Send an election message to the next replica in the ring
     private void sendElectionTo(int targetId, Map<Integer, UpdateId> candidates) {
         if (targetId == this.id) {
-            // The ring has completed a full cycle, and the election can be concluded
+            // I am the only replica alive, or the ring has completed a full cycle: conclude the election
             concludeElection(candidates);
             return;
         }
         electionAckPendingFromId = targetId;
         unicast(new Messages.Election(this.id, candidates), group.get(targetId));
 
-        int ackTimeoutMs = 3 * getMaxLatency();
+        int ackTimeoutMs = Math.max(200, 5 * getMaxLatency());
         electionAckTimer = setTimeout(ackTimeoutMs, new Messages.ElectionAckTimeout(targetId));
     }
 
@@ -404,6 +405,11 @@ public class Replica extends AbstractReplica {
         }
 
         if (!electionInProgress) {
+            // Message from the past (controllo extra): se non siamo in election e il coordinatore attuale è già tra i candidati di questo messaggio,
+            // significa che è un messaggio duplicato rimasto in rete da un'election appena finita
+            if (coordinatorId != -1 && msg.candidates.containsKey(coordinatorId)) {
+                return;
+            }
             electionInProgress = true;
             triggerElectionStartedCallback();
             scheduleElectionOverallTimeout();
