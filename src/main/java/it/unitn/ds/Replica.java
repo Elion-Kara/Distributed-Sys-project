@@ -423,16 +423,16 @@ public class Replica extends AbstractReplica {
     }
 
     private void concludeElection(Map<Integer, UpdateId> candidates) {
-    int winnerId = pickWinner(candidates);
+        int winnerId = pickWinner(candidates);
 
-    if (winnerId == this.id) {
-        // I am the winner: I become the new coordinator and notify everyone
-        becomeCoordinator();
-    } else {
-        // I am not the winner, I send the election message to the next replica in the ring
-        sendElectionTo(nextInRing(this.id), candidates);
+        if (winnerId == this.id) {
+            // I am the winner: I become the new coordinator and notify everyone
+            becomeCoordinator();
+        } else {
+            // I am not the winner, I send the election message to the next replica in the ring
+            sendElectionTo(nextInRing(this.id), candidates);
+        }
     }
-}
 
     // Pick the winner based on the highest UpdateId, and in case of a tie, the highest replica ID
     private int pickWinner(Map<Integer, UpdateId> candidates) {
