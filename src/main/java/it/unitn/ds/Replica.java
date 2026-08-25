@@ -45,6 +45,8 @@ public class Replica extends AbstractReplica {
 
     // Crash state
     private boolean crashed = false;
+    private Crash scheduledCrash = null;
+    private int scheduledCrashCounter = 0;
 
     // Election state
     private boolean electionInProgress = false;
@@ -133,10 +135,23 @@ public class Replica extends AbstractReplica {
     //
     @Override
     public void crash(Crash how_to_crash) {
-        if (how_to_crash != null && how_to_crash.type == Crash.Type.Now) {
+        if(how_to_crash == null) return;
+        if (how_to_crash.type == Crash.Type.Now) {
             doCrash();
+            return;
         }
+        // for other crash type store the information
+        scheduledCrash = how_to_crash;
+        scheduledCrashCounter = 0;
     }
+
+    private void countTowardScheduledCrash(Crash.Type type) {
+        if (scheduledCrash.type != type) return; 
+        scheduledCrashCounter++;
+        if (scheduledCrashCounter >= scheduledCrash.after_n_messages_of_type) {
+            doCrash();
+    }
+}
 
     private void doCrash() {
         this.crashed = true;
@@ -158,23 +173,22 @@ public class Replica extends AbstractReplica {
             getSelf(),
             msg, // the message to send
             getContext().system().dispatcher(), getSelf()
-            );
-
+        );
     }
 
-        public void onTimeoutUpdate(Messages.TimeoutUpdate msg) {
-            // if the Update is still in the replica waiting to be committed,
-            // the WriteOK has never been recieved, therefore the coordinator is crashed
-            if (!pendingUpdateWrites.containsKey(msg.id)) return;
-            startElection();
-        }
+    public void onTimeoutUpdate(Messages.TimeoutUpdate msg) {
+        // if the Update is still in the replica waiting to be committed,
+        // the WriteOK has never been recieved, therefore the coordinator is crashed
+        if (!pendingUpdateWrites.containsKey(msg.id)) return;
+        startElection();
+    }
 
-        public void onTimeoutForward(Messages.TimeoutForward msg) {
-            // if the Update is still in the replica waiting to be committed,
-            // the WriteOK has never been recieved, therefore the coordinator is crashed
-            if (!pendingForwards.containsKey(msg.localReqId)) return;
-            startElection();
-        }
+    public void onTimeoutForward(Messages.TimeoutForward msg) {
+        // if the Update is still in the replica waiting to be committed,
+        // the WriteOK has never been recieved, therefore the coordinator is crashed
+        if (!pendingForwards.containsKey(msg.localReqId)) return;
+        startElection();
+    }
 
 
     //
@@ -194,6 +208,10 @@ public class Replica extends AbstractReplica {
     private void onHeartbeat(Messages.Heartbeat msg) {
         if (isCoordinator()) return; // the coordinator does not expect heartbeats from itself
         resetHeartbeatTimeout();
+
+        if (scheduledCrash != null){
+            countTowardScheduledCrash(Crash.Type.Heartbeat);
+        }
     }
 
     private void resetHeartbeatTimeout() {
@@ -251,12 +269,12 @@ public class Replica extends AbstractReplica {
     // 1.  Upon receiving the update, the coordinator send it to all replicas (its self included)
     private void startUpdate(ActorRef client, int index, int value, ActorRef origin, int localReqId) {
         UpdateId id = new UpdateId(currentEpoch, nextSeqNum++);
-        Messages.UpdateWrite update = new Messages.UpdateWrite(id, index, value, origin, client, localReqId);
 
         pendingAck.put(id, new HashSet<>());
 
         for (ActorRef replica : group.values()) {
-            unicast(update, replica);
+            unicast(new Messages.UpdateWrite(id, index, value, origin, client, localReqId),
+                    replica);
         }
     }
 
@@ -269,11 +287,15 @@ public class Replica extends AbstractReplica {
         pendingUpdateWrites.put(msg.id, msg);
         updateHistory.put(msg.id, msg); // permanent record
 
-        unicast(new Messages.Ack(msg.id, this.id), group.get(coordinatorId));
+        unicast(new Messages.Ack(msg.id, this.id), group.get(getCoordinatorId()));
 
         int timeout = 2 * getMaxLatency() * getSystemNumberOfActors();
         Cancellable timer = setTimeout(timeout, new Messages.TimeoutUpdate(msg.id));
         updateTimers.put(msg.id, timer);
+
+        if (scheduledCrash != null){
+            countTowardScheduledCrash(Crash.Type.Update);
+        }
     }
 
     // 3. Coordinator gets the ACKs and applies the update if quorum is reached
@@ -302,6 +324,10 @@ public class Replica extends AbstractReplica {
         if (t != null) t.cancel();
 
         applyUpdateIfNeeded(msg.id);
+
+        if (scheduledCrash != null){
+            countTowardScheduledCrash(Crash.Type.WriteOK);
+        }
     }
 
     // Apply the update if it has not been applied yet
@@ -378,7 +404,8 @@ public class Replica extends AbstractReplica {
         electionAckPendingFromId = targetId;
         unicast(new Messages.Election(this.id, candidates), group.get(targetId));
 
-        int ackTimeoutMs = Math.max(200, 5 * getMaxLatency());
+        // TODO: N x getMaxLatency() ?
+        int ackTimeoutMs = Math.max(200, 5 * getMaxLatency()); 
         electionAckTimer = setTimeout(ackTimeoutMs, new Messages.ElectionAckTimeout(targetId));
     }
 
@@ -397,6 +424,9 @@ public class Replica extends AbstractReplica {
     private void onElection(Messages.Election msg) {
         // Always send an ACK to the sender
         unicast(new Messages.ElectionAck(), group.get(msg.senderId));
+        if (scheduledCrash != null){
+            countTowardScheduledCrash(Crash.Type.Election);
+        }
 
         // If the election message already contains this replica's ID, it means the ring has completed a full cycle and the election can be concluded
         if (msg.candidates.containsKey(this.id)) {
@@ -459,10 +489,10 @@ public class Replica extends AbstractReplica {
         currentEpoch++;
         nextSeqNum = 0;
 
-        callbackOnCoordinatorElected(this.id);
+        electionInProgress = false;
+        electionStartedCallbackCalled = false;
 
-        completePendingUpdates();
-        processPendingForwardsAndBufferedWrites();
+        callbackOnCoordinatorElected(this.id);
 
         List<Messages.UpdateWrite> allUpdates = new ArrayList<>(updateHistory.values());
         allUpdates.sort(Comparator.comparing(u -> u.id));
@@ -471,8 +501,9 @@ public class Replica extends AbstractReplica {
             unicast(new Messages.Synchronization(this.id, currentEpoch, allUpdates), replica);
         }
 
-        electionInProgress = false;
-        electionStartedCallbackCalled = false;
+        completePendingUpdates();
+        processPendingForwardsAndBufferedWrites();
+
         scheduleNextHeartbeat();
     }
 
