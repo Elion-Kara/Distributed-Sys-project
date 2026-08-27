@@ -98,7 +98,7 @@ public class Messages {
         }
     }
 
-    // Replica (non-coordinator) -> Replica (coordinator): 2st phase of Write committing
+    // Replica (non-coordinator) -> Replica (coordinator): 2nd phase of Write committing
     public static class WriteOK implements Serializable {
         public final UpdateId id;
         public WriteOK(UpdateId id) {

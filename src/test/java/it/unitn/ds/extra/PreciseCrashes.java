@@ -127,7 +127,7 @@ public class PreciseCrashes {
 
 		}
  
-		//Replica_TARGET is crashed thus cannot communicate
+		// Replica_TARGET is crashed thus cannot communicate
 		client.tell(new AbstractClient.WriteRequest(2, 100), Actor.noSender());
 		WriteResult wr3 = (WriteResult) clientProbe.fishForMessage(
 				Duration.ofMillis(TestsCommons.getMaxUpdateDelay(sys)), "WriteResult",
@@ -183,6 +183,53 @@ public class PreciseCrashes {
 				msg -> msg instanceof WriteResult);
 		assertEquals(new WriteResult(true, 0, 77, SURVIVOR), wr);
  
+		sys.system.terminate();
+	}
+
+	@ParameterizedTest(name = "crash on Replica after N-th Heartbeat message => coordinator {0}, nodes {1}, threshold {2}")
+	@CsvSource({
+			"0,7,3",
+			"1,22,2",
+	})
+	void crashAfterNthHeartbeatMessage(int coordinator, int n_nodes, int threshold) throws InterruptedException {
+		// TARGET will always be a non-coordinator (because coordinator doesn't receive heartbeats from itself)
+		final int TARGET = (coordinator + 1) % n_nodes;
+
+		final TestsSystemWrapper sys = TestsCommons.createTestSystem(
+				"crashAfterNthHeartbeatMessage_" + coordinator + "_" + n_nodes + "_" + threshold, n_nodes, coordinator);
+
+		sys.actors.get(TARGET).tell(new Crash(Crash.Type.Heartbeat, threshold), Actor.noSender());
+
+		// Before the threshold-th heartbeat has been processed, Replica_TARGET must still be
+		// alive and responsive to ordinary requests (not crased yet)
+		Thread.sleep((threshold - 1) * (long) TestsCommons.TEST_COORDINATOR_BEAT_INTERVAL
+				+ TestsCommons.getBaseMaxUpdateDelay(sys));
+
+		TestKit aliveProbe = new TestKit(sys.system);
+		sys.actors.get(TARGET).tell(new Messages.ReadReq(aliveProbe.getRef(), 0), Actor.noSender());
+		aliveProbe.expectMsgClass(Duration.ofMillis(TestsCommons.getLatencyPlusEpsilon(sys)), Messages.ReadResp.class);
+
+		// Wait for the threshold-th heartbeat to be delivered and processed: the replica must
+		// crash right after handling it
+		Thread.sleep(TestsCommons.TEST_COORDINATOR_BEAT_INTERVAL + TestsCommons.getBaseMaxUpdateDelay(sys));
+
+		// Replica_TARGET is not responding anymore (crash confirmed)
+		TestKit silenceProbe = new TestKit(sys.system);
+		sys.actors.get(TARGET).tell(new Messages.ReadReq(silenceProbe.getRef(), 0), Actor.noSender());
+		silenceProbe.expectNoMessage(Duration.ofMillis(sys.client_read_timeout));
+
+		// Final check: the system still works without Replica_TARGET
+		TestKit clientProbe = new TestKit(sys.system);
+		ActorRef client = sys.system.actorOf(
+				Client.propsWithListener(sys.client_read_timeout, sys.client_write_timeout,
+						Optional.ofNullable(sys.actors.get(coordinator)), clientProbe.getRef()),
+				"client");
+		client.tell(new AbstractClient.WriteRequest(0, 999), Actor.noSender());
+		WriteResult wr = (WriteResult) clientProbe.fishForMessage(
+				Duration.ofMillis(TestsCommons.getMaxUpdateDelay(sys)), "WriteResult",
+				msg -> msg instanceof WriteResult);
+		assertEquals(new WriteResult(true, 0, 999, coordinator), wr);
+
 		sys.system.terminate();
 	}
 

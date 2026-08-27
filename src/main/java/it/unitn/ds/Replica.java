@@ -63,7 +63,7 @@ public class Replica extends AbstractReplica {
 
     // Permanent record of every update ever seen, and which ones were applied:
     // needed so a replica can still state which is the most recent update it knows about, 
-    // even after that update has already been applied (and thus removed from pendingUpdateWrites),
+    // even after that update has already been applied (and removed from pendingUpdateWrites),
     // and so the new coordinator can send a full Synchronization to everyone
     private final Map<UpdateId, Messages.UpdateWrite> updateHistory = new HashMap<>();
     private final Set<UpdateId> appliedUpdates = new HashSet<>();
@@ -166,7 +166,6 @@ public class Replica extends AbstractReplica {
     //
     // –––– Timers –––
     //
-
     Cancellable setTimeout(int time, java.io.Serializable msg) {
         return getContext().system().scheduler().scheduleOnce(
             Duration.create(time, TimeUnit.MILLISECONDS),  
@@ -178,7 +177,7 @@ public class Replica extends AbstractReplica {
 
     public void onTimeoutUpdate(Messages.TimeoutUpdate msg) {
         // if the Update is still in the replica waiting to be committed,
-        // the WriteOK has never been recieved, therefore the coordinator is crashed
+        // the WriteOK has never been received, therefore the coordinator is crashed
         if (!pendingUpdateWrites.containsKey(msg.id)) return;
         startElection();
     }
@@ -227,7 +226,6 @@ public class Replica extends AbstractReplica {
     //
     // ––– READ –––
     //
-
     private void onReadReq(Messages.ReadReq msg) {
         int value = P[msg.index];
         unicast(new Messages.ReadResp(msg.index, value, this.id), msg.client);
@@ -259,14 +257,13 @@ public class Replica extends AbstractReplica {
     private void onForwardWrite(Messages.ForwardWrite msg) {
         if (!isCoordinator() || electionInProgress) return;
         startUpdate(msg.client, msg.index, msg.value, msg.origin, msg.localReqId);
-        //setTimeout(COORDINATOR_BEAT_INTERVAL);
     }
 
     //
     // ––– UPDATE PROTOCOL: WRITE –––
     //
 
-    // 1.  Upon receiving the update, the coordinator send it to all replicas (its self included)
+    // 1.  When it receives the update, the coordinator sends it to all replicas (itself included)
     private void startUpdate(ActorRef client, int index, int value, ActorRef origin, int localReqId) {
         UpdateId id = new UpdateId(currentEpoch, nextSeqNum++);
 
@@ -278,7 +275,7 @@ public class Replica extends AbstractReplica {
         }
     }
 
-    // 2. Every replica save the update and fires an ACK to coordinator
+    // 2. Every replica saves the update and fires an ACK to coordinator
     private void onUpdateWrite(Messages.UpdateWrite msg) {
         if (msg.origin.equals(getSelf()) && pendingForwards.containsKey(msg.localReqId)){
             PendingForward pf = pendingForwards.remove(msg.localReqId);
@@ -298,7 +295,7 @@ public class Replica extends AbstractReplica {
         }
     }
 
-    // 3. Coordinator gets the ACKs and applies the update if quorum is reached
+    // 3. Coordinator gets the ACKs and, when it reaches the quorum, applies the update
     private void onAck(Messages.Ack msg) {
         if (!isCoordinator()) return;
 
@@ -317,7 +314,7 @@ public class Replica extends AbstractReplica {
         }
     }
 
-    // 4. Every replica commits the write updates
+    // 4. Every replica commits the write update
     private void onWriteOK(Messages.WriteOK msg) {
         pendingUpdateWrites.remove(msg.id);
         Cancellable t = updateTimers.remove(msg.id);
@@ -358,6 +355,7 @@ public class Replica extends AbstractReplica {
     // Given a replica ID, return the next replica in the ring (skipping crashed replicas)
     private int nextInRing(int fromId) {
         List<Integer> ids = new ArrayList<>(group.keySet());
+        // it orders the list in ascending order
         Collections.sort(ids);
         int idx = ids.indexOf(fromId);
         return ids.get((idx + 1) % ids.size());
@@ -404,9 +402,10 @@ public class Replica extends AbstractReplica {
         electionAckPendingFromId = targetId;
         unicast(new Messages.Election(this.id, candidates), group.get(targetId));
 
-        // TODO: N x getMaxLatency() ?
-        int ackTimeoutMs = Math.max(200, 5 * getMaxLatency()); 
-        electionAckTimer = setTimeout(ackTimeoutMs, new Messages.ElectionAckTimeout(targetId));
+        // TODO: per sicurezza mettere Math.max(200, 5 * getMaxLatency() * getSystemNumberOfActors());
+        // in tutti i timeout? (se N è piccolo)
+        int timeout = 2 * getMaxLatency() * getSystemNumberOfActors();
+        electionAckTimer = setTimeout(timeout, new Messages.ElectionAckTimeout(targetId));
     }
 
     private void onElectionAckTimeout(Messages.ElectionAckTimeout msg) {
@@ -435,8 +434,8 @@ public class Replica extends AbstractReplica {
         }
 
         if (!electionInProgress) {
-            // TODO: Message from the past (additional check): se non siamo in election e il coordinatore attuale è già tra i candidati di questo messaggio,
-            // significa che è un messaggio duplicato rimasto in rete da un'election appena finita
+            // additional check: if we are not in election and the current coordinator is already among the candidates of this message,
+            // it means that this is a duplicate message left in the network from a just finished election (ignore)
             if (coordinatorId != -1 && msg.candidates.containsKey(coordinatorId)) {
                 return;
             }

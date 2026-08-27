@@ -82,7 +82,11 @@ public abstract class AbstractClient extends AbstractActor {
         @Override
         public boolean equals(Object obj) {
             if (obj instanceof Result) {
-                return ((Result)obj).success == this.success && ((Result)obj).value == this.value && ((Result)obj).index == this.index && ((Result)obj).fromReplica == this.fromReplica;
+                Result other = (Result) obj;
+                return this.success == other.success 
+                    && java.util.Objects.equals(this.value, other.value)
+                    && this.index == other.index 
+                    && this.fromReplica == other.fromReplica;
             }
             return super.equals(obj);
         }
