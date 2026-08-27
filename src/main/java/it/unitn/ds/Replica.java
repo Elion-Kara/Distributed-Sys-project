@@ -402,9 +402,8 @@ public class Replica extends AbstractReplica {
         electionAckPendingFromId = targetId;
         unicast(new Messages.Election(this.id, candidates), group.get(targetId));
 
-        // TODO: per sicurezza mettere Math.max(200, 5 * getMaxLatency() * getSystemNumberOfActors());
-        // in tutti i timeout? (se N è piccolo)
         int timeout = 2 * getMaxLatency() * getSystemNumberOfActors();
+        if (electionAckTimer != null) electionAckTimer.cancel();
         electionAckTimer = setTimeout(timeout, new Messages.ElectionAckTimeout(targetId));
     }
 
