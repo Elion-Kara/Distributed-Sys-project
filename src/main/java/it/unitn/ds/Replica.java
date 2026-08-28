@@ -69,7 +69,7 @@ public class Replica extends AbstractReplica {
     private final Set<UpdateId> appliedUpdates = new HashSet<>();
 
     // Ring election state
-    private Map<Integer, UpdateId> electionCandidates; // election message 
+    private Map<Integer, UpdateId> electionCandidates  = new HashMap<>(); // election message 
     private int electionAckPendingFromId = -1; // recipient of the last election message sent, waiting for its ACK
     private Cancellable electionAckTimer;
     private Cancellable electionOverallTimer; // it guarantees that the election will eventually terminate 
@@ -110,6 +110,12 @@ public class Replica extends AbstractReplica {
     private void unicast(java.io.Serializable msg, ActorRef dest) {
         if (crashed) return;
         tell(msg, dest);
+    }
+
+    private void broadcast(java.io.Serializable msg) {
+        for (ActorRef replica : group.values()) {
+            unicast(msg, replica);
+        }
     }
 
     //
@@ -198,16 +204,14 @@ public class Replica extends AbstractReplica {
     }
 
     private void onSendHeartbeat(Messages.SendHeartbeat msg) {
-        for (ActorRef replica : group.values()) {
-            unicast(new Messages.Heartbeat(), replica);
-        }
+        broadcast(new Messages.Heartbeat());
         scheduleNextHeartbeat();
     }
 
     private void onHeartbeat(Messages.Heartbeat msg) {
         if (isCoordinator()) return; // the coordinator does not expect heartbeats from itself
+        
         resetHeartbeatTimeout();
-
         if (scheduledCrash != null){
             countTowardScheduledCrash(Crash.Type.Heartbeat);
         }
@@ -266,13 +270,8 @@ public class Replica extends AbstractReplica {
     // 1.  When it receives the update, the coordinator sends it to all replicas (itself included)
     private void startUpdate(ActorRef client, int index, int value, ActorRef origin, int localReqId) {
         UpdateId id = new UpdateId(currentEpoch, nextSeqNum++);
-
         pendingAck.put(id, new HashSet<>());
-
-        for (ActorRef replica : group.values()) {
-            unicast(new Messages.UpdateWrite(id, index, value, origin, client, localReqId),
-                    replica);
-        }
+        broadcast(new Messages.UpdateWrite(id, index, value, origin, client, localReqId));
     }
 
     // 2. Every replica saves the update and fires an ACK to coordinator
@@ -307,10 +306,7 @@ public class Replica extends AbstractReplica {
         int quorum = (group.size() / 2) + 1;
         if (acked.size() >= quorum) {
             pendingAck.remove(msg.id);
-
-            for (ActorRef replica : group.values()){
-                unicast(new Messages.WriteOK(msg.id), replica);
-            }
+            broadcast(new Messages.WriteOK(msg.id));
         }
     }
 
@@ -340,7 +336,7 @@ public class Replica extends AbstractReplica {
         P[update.index] = update.value;
         appliedUpdates.add(id);
         callbackOnUpdateApplied(update.index, update.value);
-        log("applied update " + id + " (" + update.index + ", " + update.value + ")");
+        // log("applied update " + id + " (" + update.index + ", " + update.value + ")");
         
         // this replica was the one originally contacted by the client, so it replies directly
         if (update.origin.equals(getSelf())) {
@@ -395,16 +391,17 @@ public class Replica extends AbstractReplica {
     // Send an election message to the next replica in the ring
     private void sendElectionTo(int targetId, Map<Integer, UpdateId> candidates) {
         if (targetId == this.id) {
-            // I am the only replica alive, or the ring has completed a full cycle: conclude the election
+            // I am the only replica alive or the ring has completed a full cycle: conclude the election
             concludeElection(candidates);
             return;
         }
         electionAckPendingFromId = targetId;
         unicast(new Messages.Election(this.id, candidates), group.get(targetId));
 
-        int timeout = 2 * getMaxLatency() * getSystemNumberOfActors();
+        // int timeout = 2 * getMaxLatency() * getSystemNumberOfActors();
+        int ackTimeoutMs = 4 * getMaxLatency();
         if (electionAckTimer != null) electionAckTimer.cancel();
-        electionAckTimer = setTimeout(timeout, new Messages.ElectionAckTimeout(targetId));
+        electionAckTimer = setTimeout(ackTimeoutMs, new Messages.ElectionAckTimeout(targetId));
     }
 
     private void onElectionAckTimeout(Messages.ElectionAckTimeout msg) {
@@ -443,7 +440,8 @@ public class Replica extends AbstractReplica {
             scheduleElectionOverallTimeout();
         }
 
-        Map<Integer, UpdateId> merged = new HashMap<>(msg.candidates);
+        Map<Integer, UpdateId> merged = new HashMap<>(electionCandidates);
+        merged.putAll(msg.candidates); 
         merged.put(this.id, getLastKnownUpdateId());
 
         electionCandidates = merged;
@@ -495,9 +493,7 @@ public class Replica extends AbstractReplica {
         List<Messages.UpdateWrite> allUpdates = new ArrayList<>(updateHistory.values());
         allUpdates.sort(Comparator.comparing(u -> u.id));
 
-        for (ActorRef replica : group.values()) {
-            unicast(new Messages.Synchronization(this.id, currentEpoch, allUpdates), replica);
-        }
+        broadcast(new Messages.Synchronization(this.id, currentEpoch, allUpdates));
 
         completePendingUpdates();
         processPendingForwardsAndBufferedWrites();
@@ -542,6 +538,7 @@ public class Replica extends AbstractReplica {
 
     private void scheduleElectionOverallTimeout() {
         int margin = (int) (getCoordinatorBeatInterval() * 3.0) + (4 * getMaxLatency() * getSystemNumberOfActors());
+        if (electionOverallTimer != null) electionOverallTimer.cancel();
         electionOverallTimer = setTimeout(margin, new Messages.ElectionOverallTimeout());
     }
 

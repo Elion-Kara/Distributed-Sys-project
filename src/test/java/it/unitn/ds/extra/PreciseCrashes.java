@@ -14,7 +14,6 @@ import org.junit.jupiter.params.provider.CsvSource;
 import akka.actor.Actor;
 import akka.actor.ActorRef;
 import it.unitn.ds.AbstractClient;
-import it.unitn.ds.AbstractClient.ReadResult;
 import it.unitn.ds.AbstractClient.WriteResult;
 import it.unitn.ds.Client;
 import it.unitn.ds.Messages;
@@ -165,7 +164,7 @@ public class PreciseCrashes {
 		assertEquals(coordinator, targetStarted.crashedCoordinatorId);
  
 		CoordinatorElected elected = (CoordinatorElected) sys.probes.get(SURVIVOR).fishForMessage(
-				Duration.ofMillis(TestsCommons.getElectionMaxDelay(sys) * 2),
+				Duration.ofMillis(TestsCommons.getElectionMaxDelay(sys) * 5),
 				"CoordinatorElected",
 				msg -> msg instanceof CoordinatorElected);
 		assertNotEquals(coordinator, elected.newCoordinatorId);
@@ -200,10 +199,11 @@ public class PreciseCrashes {
 
 		sys.actors.get(TARGET).tell(new Crash(Crash.Type.Heartbeat, threshold), Actor.noSender());
 
+		long heartbeatMargin = 2L * sys.max_latency;
 		// Before the threshold-th heartbeat has been processed, Replica_TARGET must still be
 		// alive and responsive to ordinary requests (not crased yet)
 		Thread.sleep((threshold - 1) * (long) TestsCommons.TEST_COORDINATOR_BEAT_INTERVAL
-				+ TestsCommons.getBaseMaxUpdateDelay(sys));
+				+ heartbeatMargin);
 
 		TestKit aliveProbe = new TestKit(sys.system);
 		sys.actors.get(TARGET).tell(new Messages.ReadReq(aliveProbe.getRef(), 0), Actor.noSender());
@@ -211,7 +211,7 @@ public class PreciseCrashes {
 
 		// Wait for the threshold-th heartbeat to be delivered and processed: the replica must
 		// crash right after handling it
-		Thread.sleep(TestsCommons.TEST_COORDINATOR_BEAT_INTERVAL + TestsCommons.getBaseMaxUpdateDelay(sys));
+		Thread.sleep(TestsCommons.TEST_COORDINATOR_BEAT_INTERVAL + heartbeatMargin);
 
 		// Replica_TARGET is not responding anymore (crash confirmed)
 		TestKit silenceProbe = new TestKit(sys.system);

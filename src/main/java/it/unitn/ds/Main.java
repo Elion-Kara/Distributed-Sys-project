@@ -65,8 +65,6 @@ public class Main {
         client.tell(new ReadRequest(0), ActorRef.noSender());
         Thread.sleep(500);
 
-
-
         section("3) WRITE on a NON coordinator replica (Replica_2): test the forward");
 
         ActorRef client2 = system.actorOf(
@@ -120,7 +118,7 @@ public class Main {
             Thread.sleep(300);
         }
 
-        
+
         Thread.sleep(500);
 
         system.terminate();
