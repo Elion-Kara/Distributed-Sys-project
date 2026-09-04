@@ -130,9 +130,11 @@ public class Messages {
 
     public static class Election implements Serializable {
         public final int senderId; // ID of the replica sending the message
+        public final int epoch;
         public final Map<Integer, UpdateId> candidates; // replicaId -> last known update id of that replica
-        public Election(int senderId, Map<Integer, UpdateId> candidates) {
+        public Election(int senderId, int epoch, Map<Integer, UpdateId> candidates) {
             this.senderId = senderId;
+            this.epoch = epoch;
             this.candidates = candidates;
         }
     }

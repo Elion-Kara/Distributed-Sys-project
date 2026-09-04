@@ -381,22 +381,24 @@ public class Replica extends AbstractReplica {
         electionInProgress = true;
         triggerElectionStartedCallback();
 
+        if (heartbeatTimeoutTimer != null) heartbeatTimeoutTimer.cancel();
+
         electionCandidates = new HashMap<>();
         electionCandidates.put(this.id, getLastKnownUpdateId());
 
         scheduleElectionOverallTimeout();
-        sendElectionTo(nextInRing(this.id), electionCandidates);
+        sendElectionTo(nextInRing(this.id),  electionCandidates, currentEpoch);
     }
 
     // Send an election message to the next replica in the ring
-    private void sendElectionTo(int targetId, Map<Integer, UpdateId> candidates) {
+    private void sendElectionTo(int targetId, Map<Integer, UpdateId> candidates, int epoch) {
         if (targetId == this.id) {
             // I am the only replica alive or the ring has completed a full cycle: conclude the election
             concludeElection(candidates);
             return;
         }
         electionAckPendingFromId = targetId;
-        unicast(new Messages.Election(this.id, candidates), group.get(targetId));
+        unicast(new Messages.Election(this.id, epoch,  candidates), group.get(targetId));
 
         // int timeout = 2 * getMaxLatency() * getSystemNumberOfActors();
         int ackTimeoutMs = 4 * getMaxLatency();
@@ -407,7 +409,7 @@ public class Replica extends AbstractReplica {
     private void onElectionAckTimeout(Messages.ElectionAckTimeout msg) {
         if (msg.expectedFromId != electionAckPendingFromId) return; // ignore if the ACK has already been received
         debug("replica " + msg.expectedFromId + " did not respond to election, assuming it crashed");
-        sendElectionTo(nextInRing(msg.expectedFromId), electionCandidates);
+        sendElectionTo(nextInRing(msg.expectedFromId), electionCandidates, currentEpoch);
     }
 
     private void onElectionAck(Messages.ElectionAck msg) {
@@ -417,6 +419,7 @@ public class Replica extends AbstractReplica {
 
 
     private void onElection(Messages.Election msg) {
+        if (msg.epoch < this.currentEpoch) return;
         // Always send an ACK to the sender
         unicast(new Messages.ElectionAck(), group.get(msg.senderId));
         if (scheduledCrash != null){
@@ -432,9 +435,9 @@ public class Replica extends AbstractReplica {
         if (!electionInProgress) {
             // additional check: if we are not in election and the current coordinator is already among the candidates of this message,
             // it means that this is a duplicate message left in the network from a just finished election (ignore)
-            if (coordinatorId != -1 && msg.candidates.containsKey(coordinatorId)) {
-                return;
-            }
+            // if (coordinatorId != -1 && msg.candidates.containsKey(coordinatorId)) {
+            //     return;
+            // }
             electionInProgress = true;
             triggerElectionStartedCallback();
             scheduleElectionOverallTimeout();
@@ -445,10 +448,12 @@ public class Replica extends AbstractReplica {
         merged.put(this.id, getLastKnownUpdateId());
 
         electionCandidates = merged;
-        sendElectionTo(nextInRing(this.id), merged);
+        sendElectionTo(nextInRing(this.id), merged, msg.epoch);
     }
 
     private void concludeElection(Map<Integer, UpdateId> candidates) {
+        if (!electionInProgress) return;
+
         int winnerId = pickWinner(candidates);
 
         if (winnerId == this.id) {
@@ -456,7 +461,7 @@ public class Replica extends AbstractReplica {
             becomeCoordinator();
         } else {
             // I am not the winner, I send the election message to the next replica in the ring
-            sendElectionTo(nextInRing(this.id), candidates);
+            sendElectionTo(nextInRing(this.id), candidates, currentEpoch);
         }
     }
 
@@ -504,7 +509,11 @@ public class Replica extends AbstractReplica {
     private void completePendingUpdates() {
         for (Messages.UpdateWrite u : new ArrayList<>(updateHistory.values())) {
             if (!appliedUpdates.contains(u.id)) {
-                startUpdate(u.client, u.index, u.value, u.origin, u.localReqId);
+                // old: startUpdate(u.client, u.index, u.value, u.origin, u.localReqId);
+                // Repeat the startUpdate without incrementing the update ID,
+                // so all replicas will see it as the coordinator had
+                pendingAck.put(u.id, new HashSet<>());
+                broadcast(u);
             }
         }
     }
@@ -569,7 +578,7 @@ public class Replica extends AbstractReplica {
 
         for (Messages.UpdateWrite u : sortedUpdates) {
             updateHistory.putIfAbsent(u.id, u);
-            applyUpdateIfNeeded(u.id);
+            // applyUpdateIfNeeded(u.id);
         }
 
         boolean iAmTheNewCoordinator = (msg.newCoordinatorId == this.id);
