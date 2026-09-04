@@ -122,4 +122,6 @@ This is the first time we automate the tests. If you find issues in the base cla
 ## Contributors
 
 - Stefano Genetti [stefano.genetti@unitn.it]
-- Thomas Pasquali [thomas.pasquali@unitn.it]
+- Thomas Pasquali [thomas.pasquali@unitn.it] 
+- Elion Karaboja [elion.karaboja@studenti.unitn.it]
+- Chiara Medei [chiara.medei@studenti.unitn.it]
